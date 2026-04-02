@@ -1,6 +1,6 @@
 # apimon
 
-A pip-installable CLI tool for API monitoring, analytics, and route improvement suggestions.
+A pip-installable CLI tool for API monitoring, analytics, and AI-powered improvement insights using LLM integration (OpenAI, Gemini, Anthropic).
 
 ## Features
 
@@ -10,13 +10,19 @@ A pip-installable CLI tool for API monitoring, analytics, and route improvement 
 - **Analytics Dashboard**: Rich terminal UI showing performance metrics
 - **Advanced Pattern Detection**: Automatically suggests improvements for 'chatty' APIs, slow writes, and security anomalies
 - **ASCII Graphs**: Visualize request activity over time via CLI
-- **Dual UI**: React+Ink UI for live monitoring, Textual fallback for pure Python
-- **Automated Testing**: Comprehensive test suite for storage and analytics
+- **LLM-Powered Insights**: Generate AI-driven improvement suggestions using OpenAI, Google Gemini, or Anthropic Claude
+- **Interactive TUI**: Textual-based terminal UI for live monitoring
 
 ## Installation
 
 ```bash
 pip install apimon
+```
+
+For LLM integration (optional):
+
+```bash
+pip install apimon[llm]
 ```
 
 ## Quick Start
@@ -39,6 +45,16 @@ curl http://localhost:8080/api/users
 apimon dashboard
 ```
 
+4. **Generate AI-powered insights** (requires API key):
+
+```bash
+# Set your API key
+export OPENAI_API_KEY="your-key-here"
+
+# Generate insights
+apimon insights --provider openai
+```
+
 ## Usage
 
 ### Commands
@@ -51,6 +67,7 @@ apimon dashboard
 | `apimon requests` | Show recent requests |
 | `apimon request <id>` | Show detailed view of a request |
 | `apimon suggestions` | Show improvement suggestions |
+| `apimon insights` | Generate LLM-powered AI insights |
 | `apimon graph` | Show ASCII graphs of activity |
 | `apimon ui` | Launch interactive TUI |
 | `apimon export` | Export data to JSON |
@@ -76,11 +93,57 @@ apimon requests --limit 50
 apimon suggestions
 ```
 
+### LLM Insights Command
+
+The `insights` command generates AI-powered analysis of your API analytics data:
+
+```bash
+# Using OpenAI (default)
+apimon insights
+
+# Using Google Gemini
+apimon insights --provider gemini
+
+# Using Anthropic Claude
+apimon insights --provider anthropic
+
+# Specify a custom model
+apimon insights --model gpt-4o
+
+# Analyze different time range
+apimon insights --hours 48
+```
+
+## LLM Providers
+
+### OpenAI
+
+Set the API key via environment variable or CLI option:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+apimon insights --provider openai
+```
+
+### Google Gemini
+
+```bash
+export GEMINI_API_KEY="your-gemini-key"
+apimon insights --provider gemini
+```
+
+### Anthropic Claude
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+apimon insights --provider anthropic
+```
+
 ## Architecture
 
 - **Python Backend**: Proxy server using aiohttp, data storage with SQLite/SQLAlchemy
-- **Node.js Frontend**: React+Ink CLI UI for interactive dashboards
-- **Textual Fallback**: Pure Python TUI when Node.js is unavailable
+- **Textual UI**: Pure Python TUI for interactive dashboards
+- **LLM Integration**: Optional integration with OpenAI, Gemini, or Anthropic for AI-powered insights
 
 ### Data Storage
 
@@ -101,15 +164,15 @@ This allows aggregating statistics for parameterized routes.
 
 - `APIMON_PORT`: Port for the proxy server (default: 8080)
 - `APIMON_DB_PATH`: Path to database file
+- `OPENAI_API_KEY`: OpenAI API key for LLM insights
+- `GEMINI_API_KEY`: Google Gemini API key for LLM insights
+- `ANTHROPIC_API_KEY`: Anthropic API key for LLM insights
 
 ## Development
 
 ```bash
 # Install in development mode
-pip install -e .
-
-# Install frontend dependencies
-cd frontend && npm install
+pip install -e ".[dev,llm]"
 
 # Run the proxy
 apimon proxy --target-port 3000
@@ -117,11 +180,10 @@ apimon proxy --target-port 3000
 # Run the UI
 apimon ui
 
-# Or use the Textual UI directly
+# Or use the dashboard
 apimon dashboard
 ```
 
 ## License
 
 MIT
-# cli-apimon

@@ -15,23 +15,15 @@ from apimon.proxy import create_proxy_server, ProxyServer
 from apimon.storage import DataStore
 from apimon.analytics import AnalyticsEngine, create_analytics
 from apimon.ui.textual_ui import launch_textual_ui
+from apimon.llm import (
+    LLMProvider,
+    create_llm_client,
+    LLMInsightGenerator,
+    get_provider_choices,
+)
 
 
 console = Console()
-
-
-def check_node_available() -> bool:
-    """Check if Node.js is available for the Ink UI."""
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["node", "--version"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
 
 
 @click.group()
@@ -83,28 +75,8 @@ def ui(ctx, db_path, port):
     """Launch the interactive dashboard UI."""
     path = db_path or ctx.obj.get("db_path", "apimon.db")
 
-    if check_node_available():
-        console.print("[green]Node.js detected, launching Ink UI...[/green]")
-        try:
-            import subprocess
-            frontend_path = Path(__file__).parent.parent.parent / "frontend"
-            if frontend_path.exists():
-                result = subprocess.run(
-                    ["npm", "start", "--", "--db-path", path, "--port", str(port)],
-                    cwd=str(frontend_path),
-                    env={**os.environ, "APIMON_DB_PATH": path, "APIMON_PORT": str(port)},
-                )
-                if result.returncode != 0:
-                    console.print("[yellow]Ink UI failed, falling back to Textual...[/yellow]")
-                    launch_textual_ui(path)
-            else:
-                launch_textual_ui(path)
-        except Exception as e:
-            console.print(f"[yellow]Ink UI error: {e}, falling back to Textual...[/yellow]")
-            launch_textual_ui(path)
-    else:
-        console.print("[yellow]Node.js not available, using Textual UI...[/yellow]")
-        launch_textual_ui(path)
+    console.print("[cyan]Launching Textual UI...[/cyan]")
+    launch_textual_ui(path)
 
 
 @cli.command()
@@ -281,6 +253,43 @@ def suggestions(ctx, db_path):
             branch.add(s.details)
 
     console.print(tree)
+    store.close()
+
+
+@cli.command()
+@click.option("--provider", "-p",
+              type=click.Choice(get_provider_choices()),
+              default="openai",
+              help="LLM provider to use")
+@click.option("--api-key", default=None, help="API key for the LLM provider (or use env var)")
+@click.option("--model", default=None, help="Model to use (provider-specific default if not specified)")
+@click.option("--hours", default=24, help="Time range in hours to analyze")
+@click.option("--db-path", default=None, help="Database path (overrides global)")
+@click.pass_context
+def insights(ctx, provider, api_key, model, hours, db_path):
+    """Generate AI-powered insights from analytics using LLM."""
+    path = db_path or ctx.obj.get("db_path", "apimon.db")
+    store = DataStore(path)
+
+    # Check for data
+    summary = store.get_analytics_summary()
+    if summary['total_requests'] == 0:
+        console.print("[yellow]No data available. Start the proxy and make some requests first.[/yellow]")
+        store.close()
+        return
+
+    try:
+        provider_enum = LLMProvider(provider)
+        client = create_llm_client(provider_enum, api_key)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        store.close()
+        return
+
+    generator = LLMInsightGenerator(store, client)
+    insights = generator.generate_insights(hours=hours, model=model)
+    generator.print_insights(insights)
+
     store.close()
 
 
