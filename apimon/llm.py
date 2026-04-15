@@ -177,44 +177,91 @@ def format_analytics_prompt(
     store: DataStore,
     hours: int = 24,
 ) -> str:
-    """Format analytics data into a prompt for the LLM."""
+    """Format analytics data into a comprehensive prompt for the LLM."""
     summary = store.get_analytics_summary()
     stats = store.get_route_stats()
-    requests = store.get_recent_requests(limit=100)
+    top_routes = store.get_top_routes_by_traffic(hours=hours, limit=10)
+    error_messages = store.get_unique_error_messages(hours=hours, limit=15)
+    cache_candidates = store.get_cache_candidates(hours=hours)
+    percentiles = store.get_response_time_percentiles(hours=hours)
+    route_percentiles = store.get_route_percentiles(hours=hours, limit=8)
+    error_trend = store.get_error_rate_by_hour(hours=hours)
 
-    prompt = f"""Analyze the following API monitoring data from the last {hours} hours and provide insights:
+    prompt = f"""Analyze the following API monitoring data from the last {hours} hours and provide actionable insights.
 
 ## Overall Analytics Summary
-- Total Requests: {summary['total_requests']}
+- Total Requests: {summary['total_requests']:,}
 - Error Rate: {summary['error_rate']:.1f}%
 - Average Response Time: {summary['avg_response_time_ms']:.0f}ms
 - Unique Routes: {summary['unique_routes']}
 
-## Route Statistics (Top 15)
-"""
-    for route in stats[:15]:
-        prompt += f"""
-- {route['method']} {route['route_pattern']}:
-  Hits: {route['hit_count']}, Avg: {route['avg_response_time_ms']:.0f}ms,
-  Min: {route['min_response_time_ms']:.0f}ms, Max: {route['max_response_time_ms']:.0f}ms,
-  Errors: {route['error_count']} ({route['error_rate']:.1f}%)
-"""
+## Response Time Percentiles (Global)
+- p50: {percentiles['p50']}ms
+- p90: {percentiles['p90']}ms
+- p95: {percentiles['p95']}ms
+- p99: {percentiles['p99']}ms
+- Sample size: {percentiles['sample_size']:,}
 
-    prompt += f"""
-## Recent Requests (Last 20)
+## Top Routes by Traffic Volume
 """
-    for req in requests[:20]:
-        status = "ERROR" if req['is_error'] else "OK"
-        prompt += f"- {req['method']} {req['path']} -> {req['response_status']} ({req['response_time_ms']:.0f}ms) [{status}]\n"
+    for r in top_routes:
+        prompt += f"- {r['method']} {r['route']}: {r['hits']:,} hits ({r['traffic_share_pct']}% of traffic), avg {r['avg_response_time_ms']}ms, {r['error_rate']}% errors\n"
 
     prompt += """
-Please analyze this data and provide:
-1. Key performance bottlenecks or issues
-2. Patterns that suggest architectural improvements
-3. Security concerns (if any)
-4. Prioritized action items for improving the API
+## Route-Level Latency Percentiles
+"""
+    for r in route_percentiles:
+        prompt += f"- {r['method']} {r['route']} (n={r['count']}): p50={r['p50']}ms, p90={r['p90']}ms, p95={r['p95']}ms, p99={r['p99']}ms\n"
 
-Format your response with clear sections and prioritize the most impactful improvements.
+    prompt += """
+## Unique Error Messages (Top 15)
+"""
+    if error_messages:
+        for e in error_messages:
+            body_preview = (e['error_body'] or "")[:200].replace('\n', ' ')
+            prompt += f"- {e['method']} {e['route']} -> {e['status_code']} (x{e['count']}): {body_preview}\n"
+    else:
+        prompt += "- No error response bodies captured\n"
+
+    prompt += """
+## Caching Candidates (GET routes with <10% error rate, sorted by cache benefit)
+"""
+    if cache_candidates:
+        for c in cache_candidates:
+            prompt += f"- {c['route']}: {c['hits']:,} hits, avg {c['avg_response_time_ms']}ms, benefit_score={c['cache_benefit_score']}\n"
+    else:
+        prompt += "- No strong caching candidates identified\n"
+
+    prompt += """
+## Error Rate Trend by Hour
+"""
+    for h in error_trend[-6:]:
+        prompt += f"- {h['hour']}: {h['total']} requests, {h['errors']} errors ({h['error_rate']}%)\n"
+
+    prompt += """
+## Route Statistics (All Routes)
+"""
+    for route in stats:
+        prompt += f"- {route['method']} {route['route_pattern']}: {route['hit_count']} hits, avg {route['avg_response_time_ms']:.0f}ms (min {route['min_response_time_ms']:.0f}ms, max {route['max_response_time_ms']:.0f}ms), {route['error_count']} errors ({route['error_rate']:.1f}%)\n"
+
+    prompt += """
+---
+
+Based on this data, provide:
+
+1. **Critical Issues** - What needs immediate attention? (high error rates, broken endpoints, security concerns)
+
+2. **Performance Bottlenecks** - Which routes are slow? What do the p95/p99 latencies suggest? Are there outliers?
+
+3. **Caching Strategy** - Based on the cache candidates and traffic patterns, what should be cached? Suggest TTLs and cache invalidation strategies.
+
+4. **Error Analysis** - What do the error messages reveal? Are there patterns (auth failures, missing resources, method not allowed)?
+
+5. **Architecture Recommendations** - Based on traffic distribution and latency patterns, what architectural changes would help? (rate limiting, async processing, database optimization, etc.)
+
+6. **Prioritized Action Items** - List 5-7 specific, actionable improvements in priority order with expected impact.
+
+Be specific and reference the actual data. Avoid generic advice.
 """
 
     return prompt
@@ -251,6 +298,17 @@ class LLMInsightGenerator:
             border_style="green",
             expand=False,
         ))
+
+
+def try_create_llm_client(
+    provider: LLMProvider,
+    api_key: Optional[str] = None,
+) -> Optional[LLMClient]:
+    """Create an LLM client, returning None if the key is missing or invalid."""
+    try:
+        return create_llm_client(provider, api_key)
+    except (ValueError, ImportError):
+        return None
 
 
 def get_provider_choices() -> list[str]:

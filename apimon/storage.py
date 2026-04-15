@@ -288,6 +288,344 @@ class DataStore:
                 "since": since.isoformat(),
             }
 
+    def get_status_code_distribution(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Get distribution of HTTP status codes."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.response_status,
+                    func.count(RequestRecord.id).label("count"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(RequestRecord.response_status)
+                .order_by(func.count(RequestRecord.id).desc())
+                .all()
+            )
+            return [{"status_code": r[0], "count": r[1]} for r in results]
+
+    def get_method_distribution(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Get distribution of HTTP methods."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.method,
+                    func.count(RequestRecord.id).label("count"),
+                    func.avg(RequestRecord.response_time_ms).label("avg_ms"),
+                    func.sum(case((RequestRecord.is_error == True, 1), else_=0)).label("errors"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(RequestRecord.method)
+                .order_by(func.count(RequestRecord.id).desc())
+                .all()
+            )
+            return [
+                {
+                    "method": r[0],
+                    "count": r[1],
+                    "avg_response_time_ms": round(r[2], 2) if r[2] else 0,
+                    "error_count": r[3],
+                }
+                for r in results
+            ]
+
+    def get_error_summary(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Get summary of errors grouped by route and status code."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    RequestRecord.response_status,
+                    func.count(RequestRecord.id).label("count"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .filter(RequestRecord.is_error == True)
+                .group_by(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    RequestRecord.response_status,
+                )
+                .order_by(func.count(RequestRecord.id).desc())
+                .limit(20)
+                .all()
+            )
+            return [
+                {
+                    "route": r[0],
+                    "method": r[1],
+                    "status_code": r[2],
+                    "count": r[3],
+                }
+                for r in results
+            ]
+
+    def get_slowest_routes(self, hours: int = 24, limit: int = 10) -> list[dict[str, Any]]:
+        """Get slowest routes by average response time."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    func.count(RequestRecord.id).label("count"),
+                    func.avg(RequestRecord.response_time_ms).label("avg_ms"),
+                    func.min(RequestRecord.response_time_ms).label("min_ms"),
+                    func.max(RequestRecord.response_time_ms).label("max_ms"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(RequestRecord.route_pattern, RequestRecord.method)
+                .having(func.count(RequestRecord.id) >= 5)
+                .order_by(func.avg(RequestRecord.response_time_ms).desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "route": r[0],
+                    "method": r[1],
+                    "count": r[2],
+                    "avg_response_time_ms": round(r[3], 2) if r[3] else 0,
+                    "min_response_time_ms": round(r[4], 2) if r[4] else 0,
+                    "max_response_time_ms": round(r[5], 2) if r[5] else 0,
+                }
+                for r in results
+            ]
+
+    def get_hourly_summary(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Get hourly aggregated summary."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp).label("hour"),
+                    func.count(RequestRecord.id).label("requests"),
+                    func.sum(case((RequestRecord.is_error == True, 1), else_=0)).label("errors"),
+                    func.avg(RequestRecord.response_time_ms).label("avg_ms"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp))
+                .order_by(func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp))
+                .all()
+            )
+            return [
+                {
+                    "hour": r[0],
+                    "requests": r[1],
+                    "errors": r[2],
+                    "avg_response_time_ms": round(r[3], 2) if r[3] else 0,
+                }
+                for r in results
+            ]
+
+    def get_unique_error_messages(self, hours: int = 24, limit: int = 20) -> list[dict[str, Any]]:
+        """Get unique error response bodies grouped by route and status."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    RequestRecord.response_status,
+                    RequestRecord.response_body,
+                    func.count(RequestRecord.id).label("count"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .filter(RequestRecord.is_error == True)
+                .filter(RequestRecord.response_body.isnot(None))
+                .filter(RequestRecord.response_body != "")
+                .group_by(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    RequestRecord.response_status,
+                    RequestRecord.response_body,
+                )
+                .order_by(func.count(RequestRecord.id).desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "route": r[0],
+                    "method": r[1],
+                    "status_code": r[2],
+                    "error_body": (r[3][:500] if r[3] else None),
+                    "count": r[4],
+                }
+                for r in results
+            ]
+
+    def get_cache_candidates(self, hours: int = 24, min_hits: int = 10) -> list[dict[str, Any]]:
+        """Get GET routes that are good candidates for caching (high hits, low errors, consistent responses)."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.route_pattern,
+                    func.count(RequestRecord.id).label("hits"),
+                    func.avg(RequestRecord.response_time_ms).label("avg_ms"),
+                    func.sum(case((RequestRecord.is_error == True, 1), else_=0)).label("errors"),
+                    func.count(func.distinct(RequestRecord.response_status)).label("unique_statuses"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .filter(RequestRecord.method == "GET")
+                .group_by(RequestRecord.route_pattern)
+                .having(func.count(RequestRecord.id) >= min_hits)
+                .order_by(func.count(RequestRecord.id).desc())
+                .all()
+            )
+            candidates = []
+            for r in results:
+                hits = r[1]
+                errors = r[3] or 0
+                error_rate = (errors / hits * 100) if hits > 0 else 0
+                if error_rate < 10:
+                    candidates.append({
+                        "route": r[0],
+                        "hits": hits,
+                        "avg_response_time_ms": round(r[2], 2) if r[2] else 0,
+                        "error_rate": round(error_rate, 2),
+                        "cache_benefit_score": round(hits * (r[2] or 0) / 1000, 2),
+                    })
+            return sorted(candidates, key=lambda x: x["cache_benefit_score"], reverse=True)[:10]
+
+    def get_response_time_percentiles(self, hours: int = 24) -> dict[str, Any]:
+        """Get response time percentiles (p50, p90, p95, p99)."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            results = (
+                session.query(RequestRecord.response_time_ms)
+                .filter(RequestRecord.timestamp >= since)
+                .order_by(RequestRecord.response_time_ms)
+                .all()
+            )
+            if not results:
+                return {"p50": 0, "p90": 0, "p95": 0, "p99": 0, "sample_size": 0}
+
+            times = [r[0] for r in results]
+            n = len(times)
+
+            def percentile(p: int) -> float:
+                idx = int(n * p / 100)
+                return round(times[min(idx, n - 1)], 2)
+
+            return {
+                "p50": percentile(50),
+                "p90": percentile(90),
+                "p95": percentile(95),
+                "p99": percentile(99),
+                "sample_size": n,
+            }
+
+    def get_route_percentiles(self, hours: int = 24, limit: int = 10) -> list[dict[str, Any]]:
+        """Get response time percentiles per route."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            routes = (
+                session.query(RequestRecord.route_pattern, RequestRecord.method)
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(RequestRecord.route_pattern, RequestRecord.method)
+                .having(func.count(RequestRecord.id) >= 20)
+                .order_by(func.count(RequestRecord.id).desc())
+                .limit(limit)
+                .all()
+            )
+
+            results = []
+            for route, method in routes:
+                times = [
+                    r[0] for r in session.query(RequestRecord.response_time_ms)
+                    .filter(RequestRecord.timestamp >= since)
+                    .filter(RequestRecord.route_pattern == route)
+                    .filter(RequestRecord.method == method)
+                    .order_by(RequestRecord.response_time_ms)
+                    .all()
+                ]
+                if times:
+                    n = len(times)
+
+                    def pct(p: int) -> float:
+                        return round(times[min(int(n * p / 100), n - 1)], 2)
+
+                    results.append({
+                        "route": route,
+                        "method": method,
+                        "count": n,
+                        "p50": pct(50),
+                        "p90": pct(90),
+                        "p95": pct(95),
+                        "p99": pct(99),
+                    })
+            return results
+
+    def get_error_rate_by_hour(self, hours: int = 24) -> list[dict[str, Any]]:
+        """Get error rate trend by hour to detect spikes."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp).label("hour"),
+                    func.count(RequestRecord.id).label("total"),
+                    func.sum(case((RequestRecord.is_error == True, 1), else_=0)).label("errors"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp))
+                .order_by(func.strftime("%Y-%m-%d %H:00", RequestRecord.timestamp))
+                .all()
+            )
+            return [
+                {
+                    "hour": r[0],
+                    "total": r[1],
+                    "errors": r[2],
+                    "error_rate": round((r[2] / r[1] * 100) if r[1] > 0 else 0, 2),
+                }
+                for r in results
+            ]
+
+    def get_top_routes_by_traffic(self, hours: int = 24, limit: int = 10) -> list[dict[str, Any]]:
+        """Get top routes by request volume."""
+        since = datetime.utcnow() - timedelta(hours=hours)
+        with self.Session() as session:
+            from sqlalchemy import func
+            results = (
+                session.query(
+                    RequestRecord.route_pattern,
+                    RequestRecord.method,
+                    func.count(RequestRecord.id).label("hits"),
+                    func.avg(RequestRecord.response_time_ms).label("avg_ms"),
+                    func.sum(case((RequestRecord.is_error == True, 1), else_=0)).label("errors"),
+                )
+                .filter(RequestRecord.timestamp >= since)
+                .group_by(RequestRecord.route_pattern, RequestRecord.method)
+                .order_by(func.count(RequestRecord.id).desc())
+                .limit(limit)
+                .all()
+            )
+            total_hits = sum(r[2] for r in results) or 1
+            return [
+                {
+                    "route": r[0],
+                    "method": r[1],
+                    "hits": r[2],
+                    "traffic_share_pct": round(r[2] / total_hits * 100, 2),
+                    "avg_response_time_ms": round(r[3], 2) if r[3] else 0,
+                    "error_rate": round((r[4] / r[2] * 100) if r[2] > 0 else 0, 2),
+                }
+                for r in results
+            ]
+
     def clear_data(self):
         """Clear all stored data."""
         with self.Session() as session:
